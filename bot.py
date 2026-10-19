@@ -1,6 +1,7 @@
 import asyncio
 import os
 import aiohttp
+from aiohttp import web
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -9,6 +10,9 @@ from aiogram.types import (
     InlineKeyboardButton,
     InputMediaPhoto
 )
+
+async def handle_ping(request):
+    return web.Response(text="Bot is running!")
 
 load_dotenv()
 
@@ -366,6 +370,16 @@ async def process_noop(callback: types.CallbackQuery):
 
 async def main():
     print("🚀 Бот обновлен и запущен...")
+
+    # Фоновый веб-сервер для Render и UptimeRobot
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
     await dp.start_polling(bot)
 
 
