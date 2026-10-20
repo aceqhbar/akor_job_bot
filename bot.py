@@ -21,6 +21,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("Ошибка: BOT_TOKEN не найден! Проверьте файл .env или переменные сервера.")
 
+# Вынесено в переменные окружения для внутренней сети Railway
 JOB_SERVICE_URL = os.getenv("JOB_SERVICE_URL", "https://server-node-js-akor.up.railway.app").rstrip("/")
 API_BASE_URL = f"{JOB_SERVICE_URL}/api/job-agency"
 DEFAULT_PHOTO = "https://storage.googleapis.com/job-agency-akor.firebasestorage.app/vacancy-defaults/production.webp"
@@ -29,9 +30,10 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # Хранилища состояний в памяти:
-user_languages = {}  # user_id -> lang_code
-user_vacancies = {}  # user_id -> list of vacancies
-user_page_index = {}  # user_id -> current vacancy index
+user_languages = {}       # user_id -> lang_code
+user_raw_vacancies = {}   # user_id -> полный список вакансий с бэкенда
+user_vacancies = {}       # user_id -> отфильтрованный список вакансий (под текущий город)
+user_page_index = {}      # user_id -> текущий индекс вакансии
 
 TEXTS = {
     "en": {
@@ -42,6 +44,8 @@ TEXTS = {
         "lang_saved": "Language set to English 🇬🇧",
         "loading": "⏳ Loading vacancies...",
         "no_vacancies": "No vacancies found at the moment.",
+        "choose_city": "📍 Please select a city:",
+        "all_cities": "🌐 All Cities",
         "salary": "Salary",
         "hours": "hours/week",
         "housing": "Housing",
@@ -50,6 +54,7 @@ TEXTS = {
         "no": "Not provided",
         "btn_apply": "🌐 Apply on website",
         "btn_back_menu": "🔙 Main Menu",
+        "btn_back_cities": "🏙️ Change City",
         "apply_msg": "🔗 Follow this link to submit your application:"
     },
     "nl": {
@@ -60,6 +65,8 @@ TEXTS = {
         "lang_saved": "Taal ingesteld op Nederlands 🇳🇱",
         "loading": "⏳ Vacatures laden...",
         "no_vacancies": "Momenteel geen vacatures gevonden.",
+        "choose_city": "📍 Selecteer een stad:",
+        "all_cities": "🌐 Alle steden",
         "salary": "Salaris",
         "hours": "uur/week",
         "housing": "Huisvesting",
@@ -68,6 +75,7 @@ TEXTS = {
         "no": "Niet inbegrepen",
         "btn_apply": "🌐 Solliciteer op de website",
         "btn_back_menu": "🔙 Hoofdmenu",
+        "btn_back_cities": "🏙️ Stad wijzigen",
         "apply_msg": "🔗 Volg deze link om uw sollicitatie te versturen:"
     },
     "pl": {
@@ -78,6 +86,8 @@ TEXTS = {
         "lang_saved": "Ustawiono język polski 🇵🇱",
         "loading": "⏳ Ładowanie ofert...",
         "no_vacancies": "Obecnie brak dostępnych ofert pracy.",
+        "choose_city": "📍 Wybierz miasto:",
+        "all_cities": "🌐 Wszystkie miasta",
         "salary": "Wynagrodzenie",
         "hours": "godz./tydzień",
         "housing": "Zakwaterowanie",
@@ -86,6 +96,7 @@ TEXTS = {
         "no": "Brak",
         "btn_apply": "🌐 Aplikuj na stronie",
         "btn_back_menu": "🔙 Menu główne",
+        "btn_back_cities": "🏙️ Zmień miasto",
         "apply_msg": "🔗 Kliknij poniższy link, aby aplikować:"
     },
     "uk": {
@@ -96,6 +107,8 @@ TEXTS = {
         "lang_saved": "Встановлено українську мову 🇺🇦",
         "loading": "⏳ Завантаження вакансій...",
         "no_vacancies": "Наразі вакансій не знайдено.",
+        "choose_city": "📍 Будь ласка, оберіть місто:",
+        "all_cities": "🌐 Усі міста",
         "salary": "Зарплата",
         "hours": "год/тиждень",
         "housing": "Проживання",
@@ -104,6 +117,7 @@ TEXTS = {
         "no": "Не надається",
         "btn_apply": "🌐 Відгукнутися на сайті",
         "btn_back_menu": "🔙 Головне меню",
+        "btn_back_cities": "🏙️ Змінити місто",
         "apply_msg": "🔗 Перейдіть за посиланням, щоб подати заявку:"
     },
     "ru": {
@@ -114,6 +128,8 @@ TEXTS = {
         "lang_saved": "Выбран русский язык 🇷🇺",
         "loading": "⏳ Загружаю вакансии...",
         "no_vacancies": "К сожалению, сейчас нет доступных вакансий.",
+        "choose_city": "📍 Пожалуйста, выберите город:",
+        "all_cities": "🌐 Все города",
         "salary": "Зарплата",
         "hours": "ч/неделю",
         "housing": "Жилье",
@@ -122,6 +138,7 @@ TEXTS = {
         "no": "Нет",
         "btn_apply": "🌐 Откликнуться на сайте",
         "btn_back_menu": "🔙 Главное меню",
+        "btn_back_cities": "🏙️ Сменить город",
         "apply_msg": "🔗 Перейдите по ссылке, чтобы отправить заявку:"
     }
 }
@@ -177,30 +194,52 @@ def format_vacancy_text(vac: dict, lang: str) -> str:
         f"📍 {location}\n\n"
         f"💶 <b>{t['salary']}:</b> €{salary} ({hours} {t['hours']})\n"
         f"🏠 <b>{t['housing']}:</b> {housing} | 🚗 <b>{t['transport']}:</b> {transport}\n\n"
-        f"📝 <b>Требования / Info:</b>\n{req[:300]}..."
+        f"📝 <b>Info:</b>\n{req[:300]}..."
     )
     return text
+
+
+def get_cities_keyboard(cities: list, lang: str) -> InlineKeyboardMarkup:
+    t = TEXTS.get(lang, TEXTS["en"])
+    buttons = []
+
+    # Первая кнопка — «Все города»
+    buttons.append([InlineKeyboardButton(text=t["all_cities"], callback_data="city_all")])
+
+    # Кнопки доступных городов (по 2 в ряд для компактности)
+    row = []
+    for city in cities:
+        row.append(InlineKeyboardButton(text=f"📍 {city}", callback_data=f"city_{city}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    # Кнопка возврата в главное меню
+    buttons.append([InlineKeyboardButton(text=t["btn_back_menu"], callback_data="back_to_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_vacancy_keyboard(index: int, total: int, vac_id: str, lang: str):
     t = TEXTS.get(lang, TEXTS["en"])
 
     nav_buttons = []
-    # Кнопка «Назад»
     if index > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅️", callback_data=f"nav_{index - 1}"))
 
-    # Индикатор номера
     nav_buttons.append(InlineKeyboardButton(text=f"📄 {index + 1} / {total}", callback_data="noop"))
 
-    # Кнопка «Вперёд»
     if index < total - 1:
         nav_buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"nav_{index + 1}"))
 
     keyboard = [
         nav_buttons,
         [InlineKeyboardButton(text=t["btn_apply"], callback_data=f"apply_{vac_id}")],
-        [InlineKeyboardButton(text=t["btn_back_menu"], callback_data="back_to_menu")]
+        [
+            InlineKeyboardButton(text=t["btn_back_cities"], callback_data="show_vacancies"),
+            InlineKeyboardButton(text=t["btn_back_menu"], callback_data="back_to_menu")
+        ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -242,7 +281,6 @@ async def process_language_choice(callback: types.CallbackQuery):
     t = TEXTS.get(lang_code, TEXTS["en"])
     await callback.answer(t["lang_saved"])
 
-    # Если сообщение было фото, удаляем и шлем текстовое меню
     if callback.message.photo:
         await callback.message.delete()
         await callback.message.answer(t["main_menu"], reply_markup=get_main_menu(lang_code))
@@ -273,12 +311,16 @@ async def process_back_menu(callback: types.CallbackQuery):
     lang = user_languages.get(user_id, "en")
     t = TEXTS.get(lang, TEXTS["en"])
 
-    await callback.message.delete()
-    await callback.message.answer(t["main_menu"], reply_markup=get_main_menu(lang))
+    if callback.message.photo:
+        await callback.message.delete()
+        await callback.message.answer(t["main_menu"], reply_markup=get_main_menu(lang))
+    else:
+        await callback.message.edit_text(t["main_menu"], reply_markup=get_main_menu(lang))
 
 
 @dp.callback_query(F.data == "show_vacancies")
 async def process_show_vacancies(callback: types.CallbackQuery):
+    """Шаг 1: Загрузка вакансий и предложение выбрать город"""
     user_id = callback.from_user.id
     lang = user_languages.get(user_id, "en")
     t = TEXTS.get(lang, TEXTS["en"])
@@ -290,19 +332,62 @@ async def process_show_vacancies(callback: types.CallbackQuery):
         await callback.message.answer(t["no_vacancies"])
         return
 
-    user_vacancies[user_id] = vacancies
+    # Сохраняем полный сырой список в память
+    user_raw_vacancies[user_id] = vacancies
+
+    # Вытаскиваем уникальные города, у которых есть непустое имя
+    cities_set = set()
+    for v in vacancies:
+        c_name = v.get("city", {}).get("name") if isinstance(v.get("city"), dict) else None
+        if c_name:
+            cities_set.add(c_name)
+    cities = sorted(list(cities_set))
+
+    kb = get_cities_keyboard(cities, lang)
+    caption_text = t["choose_city"]
+
+    if callback.message.photo:
+        await callback.message.delete()
+        await callback.message.answer(caption_text, reply_markup=kb)
+    else:
+        await callback.message.edit_text(caption_text, reply_markup=kb)
+
+
+@dp.callback_query(F.data.startswith("city_"))
+async def process_city_choice(callback: types.CallbackQuery):
+    """Шаг 2: Фильтрация вакансий по выбранному городу и показ первой карточки"""
+    user_id = callback.from_user.id
+    lang = user_languages.get(user_id, "en")
+    t = TEXTS.get(lang, TEXTS["en"])
+    selected_city = callback.data.replace("city_", "", 1)
+
+    raw_vacancies = user_raw_vacancies.get(user_id, [])
+
+    if selected_city == "all":
+        filtered = raw_vacancies
+    else:
+        filtered = [
+            v for v in raw_vacancies
+            if isinstance(v.get("city"), dict) and v.get("city", {}).get("name") == selected_city
+        ]
+
+    if not filtered:
+        await callback.answer(t["no_vacancies"], show_alert=True)
+        return
+
+    user_vacancies[user_id] = filtered
     user_page_index[user_id] = 0
 
-    vac = vacancies[0]
+    vac = filtered[0]
     text = format_vacancy_text(vac, lang)
-    kb = get_vacancy_keyboard(0, len(vacancies), vac["id"], lang)
+    kb = get_vacancy_keyboard(0, len(filtered), vac["id"], lang)
     photo_url = vac.get("photo") or DEFAULT_PHOTO
 
+    await callback.answer()
     await callback.message.delete()
     try:
         await callback.message.answer_photo(photo=photo_url, caption=text, parse_mode="HTML", reply_markup=kb)
     except Exception:
-        # Если фото битое, отправляем с дефолтной картинкой
         await callback.message.answer_photo(photo=DEFAULT_PHOTO, caption=text, parse_mode="HTML", reply_markup=kb)
 
 
@@ -330,7 +415,6 @@ async def process_navigation(callback: types.CallbackQuery):
             reply_markup=kb
         )
     except Exception:
-        # Если фото не поменялось или Telegram выдал ошибку, просто обновляем подпись
         try:
             await callback.message.edit_caption(caption=text, parse_mode="HTML", reply_markup=kb)
         except Exception:
@@ -344,14 +428,11 @@ async def process_apply(callback: types.CallbackQuery):
     t = TEXTS.get(lang, TEXTS["en"])
     vac_id = callback.data.split("_")[1]
 
-    # 1. Отправляем фоновый трекинг на сервер бэкенда!
     asyncio.create_task(record_transition(vac_id))
 
-    # 2. Ищем вакансию, чтобы отдать ссылку на сайт
     vacancies = user_vacancies.get(user_id, [])
     vac = next((v for v in vacancies if v["id"] == vac_id), None)
 
-    # Формируем прямую ссылку на сайт job.akordirect.com
     site_url = f"https://job.akordirect.com/{lang}/vacancies"
     if vac and vac.get("url") and vac.get("url") != "https://example.com":
         site_url = vac.get("url")
@@ -372,7 +453,6 @@ async def process_noop(callback: types.CallbackQuery):
 async def main():
     print("🚀 Бот обновлен и запущен...")
 
-    # Фоновый веб-сервер для Render и UptimeRobot
     app = web.Application()
     app.router.add_get("/", handle_ping)
     runner = web.AppRunner(app)
