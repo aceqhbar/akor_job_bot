@@ -21,7 +21,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("Ошибка: BOT_TOKEN не найден! Проверьте файл .env или переменные сервера.")
 
-API_BASE_URL = "https://server-node-js-akor.up.railway.app/api/job-agency"
+JOB_SERVICE_URL = os.getenv("JOB_SERVICE_URL", "https://server-node-js-akor.up.railway.app").rstrip("/")
+API_BASE_URL = f"{JOB_SERVICE_URL}/api/job-agency"
 DEFAULT_PHOTO = "https://storage.googleapis.com/job-agency-akor.firebasestorage.app/vacancy-defaults/production.webp"
 
 bot = Bot(token=BOT_TOKEN)
